@@ -13,39 +13,21 @@
 - 脚本集合：通过菜单运行常用远程脚本
 - 中英文界面切换
 
-## 当前脚本集合
+## 快速执行
 
-| 菜单项 | 中文入口 | 英文入口 |
-| --- | --- | --- |
-| BBR 加速脚本 | `https://scripts.zeroteam.top/NATPlugin/tcp_zhcn.sh` | `https://scripts.zeroteam.top/NATPlugin/tcp.sh` |
-| Linux 换源脚本 | `https://linuxmirrors.cn/main.sh` | `https://linuxmirrors.cn/main.sh` |
-
-BBR 加速脚本实际执行方式：
+直接从 GitHub 拉取并运行主入口脚本：
 
 ```bash
-bash <(curl -sSL "https://scripts.zeroteam.top/NATPlugin/tcp_zhcn.sh")
+bash <(curl -sSL "https://raw.githubusercontent.com/s2vzbh5s2t-crypto/ITfix/main/linux-toolbox.sh")
 ```
 
-英文界面下会执行：
+如果需要执行 BBR 加速、Linux 换源等可能修改系统配置的远程脚本，建议使用 root 权限：
 
 ```bash
-bash <(curl -sSL "https://scripts.zeroteam.top/NATPlugin/tcp.sh")
+sudo bash -c 'bash <(curl -sSL "https://raw.githubusercontent.com/s2vzbh5s2t-crypto/ITfix/main/linux-toolbox.sh")'
 ```
 
-Linux 换源脚本实际执行方式：
-
-```bash
-bash <(curl -sSL "https://linuxmirrors.cn/main.sh")
-```
-
-如果系统没有 `curl`，脚本会尝试使用 `wget -qO- URL | bash` 作为备用方式。
-
-## 文件
-
-- `linux-toolbox.sh`：主脚本入口
-- `readme.md`：项目说明文档
-
-## 使用方法
+## 本地运行
 
 赋予执行权限：
 
@@ -59,13 +41,12 @@ chmod +x linux-toolbox.sh
 ./linux-toolbox.sh
 ```
 
-如果需要执行 BBR 加速等可能修改系统配置的远程脚本，建议使用 root 权限运行：
-
-```bash
-sudo ./linux-toolbox.sh
-```
-
 运行后根据菜单输入对应编号即可。
+
+## 文件
+
+- `linux-toolbox.sh`：主脚本入口
+- `readme.md`：项目说明文档
 
 ## 菜单说明
 
@@ -86,6 +67,24 @@ sudo ./linux-toolbox.sh
 2. Linux 换源脚本
 0. 返回主菜单
 ```
+
+## 引用脚本源
+
+主入口脚本：
+
+| 名称 | 地址 | 直接执行 |
+| --- | --- | --- |
+| Linux Toolbox | `https://raw.githubusercontent.com/s2vzbh5s2t-crypto/ITfix/main/linux-toolbox.sh` | `bash <(curl -sSL "https://raw.githubusercontent.com/s2vzbh5s2t-crypto/ITfix/main/linux-toolbox.sh")` |
+
+脚本集合引用的远程脚本：
+
+| 菜单项 | 语言 | 地址 | 直接执行 |
+| --- | --- | --- | --- |
+| BBR 加速脚本 | 中文 | `https://scripts.zeroteam.top/NATPlugin/tcp_zhcn.sh` | `bash <(curl -sSL "https://scripts.zeroteam.top/NATPlugin/tcp_zhcn.sh")` |
+| BBR 加速脚本 | 英文 | `https://scripts.zeroteam.top/NATPlugin/tcp.sh` | `bash <(curl -sSL "https://scripts.zeroteam.top/NATPlugin/tcp.sh")` |
+| Linux 换源脚本 | 通用 | `https://linuxmirrors.cn/main.sh` | `bash <(curl -sSL "https://linuxmirrors.cn/main.sh")` |
+
+如果系统没有 `curl`，主脚本内部会尝试使用 `wget -qO- URL | bash` 作为备用方式运行脚本集合中的远程脚本。
 
 ## 权限说明
 
