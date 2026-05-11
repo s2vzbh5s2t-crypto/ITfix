@@ -140,7 +140,7 @@ run_remote_script() {
     confirm "$(t '确认继续？' 'Continue?')" || return
 
     if command -v curl >/dev/null 2>&1; then
-        bash <(curl -sL "$script_url")
+        bash <(curl -sSL "$script_url")
     elif command -v wget >/dev/null 2>&1; then
         wget -qO- "$script_url" | bash
     else
@@ -157,6 +157,13 @@ run_bbr_acceleration_script() {
         "https://scripts.zeroteam.top/NATPlugin/tcp.sh"
 }
 
+run_change_mirror_script() {
+    run_remote_script \
+        "$(t 'Linux 换源脚本' 'Linux Mirror Script')" \
+        "https://linuxmirrors.cn/main.sh" \
+        "https://linuxmirrors.cn/main.sh"
+}
+
 show_script_collection() {
     while true; do
         clear
@@ -164,12 +171,14 @@ show_script_collection() {
         print_blue "  $(t '脚本集合' 'Script Collection')"
         print_blue "========================================"
         printf "1. %s\n" "$(t 'BBR 加速脚本' 'BBR acceleration script')"
+        printf "2. %s\n" "$(t 'Linux 换源脚本' 'Linux mirror script')"
         printf "0. %s\n" "$(t '返回主菜单' 'Back to main menu')"
         printf "\n%s" "$(t '请输入选项' 'Enter option'): "
         read -r choice
 
         case "$choice" in
             1) run_bbr_acceleration_script ;;
+            2) run_change_mirror_script ;;
             0) return ;;
             *) print_red "$(t '无效选择' 'Invalid choice')"; pause ;;
         esac

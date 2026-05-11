@@ -18,17 +18,24 @@
 | 菜单项 | 中文入口 | 英文入口 |
 | --- | --- | --- |
 | BBR 加速脚本 | `https://scripts.zeroteam.top/NATPlugin/tcp_zhcn.sh` | `https://scripts.zeroteam.top/NATPlugin/tcp.sh` |
+| Linux 换源脚本 | `https://linuxmirrors.cn/main.sh` | `https://linuxmirrors.cn/main.sh` |
 
 BBR 加速脚本实际执行方式：
 
 ```bash
-bash <(curl -sL "https://scripts.zeroteam.top/NATPlugin/tcp_zhcn.sh")
+bash <(curl -sSL "https://scripts.zeroteam.top/NATPlugin/tcp_zhcn.sh")
 ```
 
 英文界面下会执行：
 
 ```bash
-bash <(curl -sL "https://scripts.zeroteam.top/NATPlugin/tcp.sh")
+bash <(curl -sSL "https://scripts.zeroteam.top/NATPlugin/tcp.sh")
+```
+
+Linux 换源脚本实际执行方式：
+
+```bash
+bash <(curl -sSL "https://linuxmirrors.cn/main.sh")
 ```
 
 如果系统没有 `curl`，脚本会尝试使用 `wget -qO- URL | bash` 作为备用方式。
@@ -76,6 +83,7 @@ sudo ./linux-toolbox.sh
 
 ```text
 1. BBR 加速脚本
+2. Linux 换源脚本
 0. 返回主菜单
 ```
 
