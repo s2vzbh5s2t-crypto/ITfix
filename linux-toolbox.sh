@@ -89,6 +89,84 @@ run_change_mirror_script() {
         "https://linuxmirrors.cn/main.sh"
 }
 
+change_ssh_port() {
+    clear
+    local config="/etc/ssh/sshd_config"
+    local backup
+    local current_port
+    local new_port
+    local restart_ok=0
+
+    print_cyan "$(t '修改 SSH 端口' 'Change SSH Port')"
+
+    if [ ! -f "$config" ]; then
+        print_red "$(t '未找到 SSH 配置文件：' 'SSH config file was not found:') $config"
+        pause
+        return
+    fi
+
+    current_port="$(grep -Ei '^[[:space:]]*Port[[:space:]]+[0-9]+' "$config" | tail -n 1 | sed -E 's/^[[:space:]]*Port[[:space:]]+//')"
+    current_port="${current_port:-22}"
+    printf "%s: %s\n" "$(t '当前 SSH 端口' 'Current SSH port')" "$current_port"
+    printf "%s" "$(t '请输入新的 SSH 端口' 'Enter new SSH port'): "
+    read -r new_port
+
+    case "$new_port" in
+        ''|*[!0-9]*)
+            print_red "$(t '端口必须是 1-65535 之间的数字。' 'Port must be a number between 1 and 65535.')"
+            pause
+            return
+            ;;
+    esac
+
+    if [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ]; then
+        print_red "$(t '端口必须是 1-65535 之间的数字。' 'Port must be a number between 1 and 65535.')"
+        pause
+        return
+    fi
+
+    print_yellow "$(t '请确认防火墙和安全组已放行新端口，否则可能无法重新连接 SSH。' 'Make sure the firewall and security group allow the new port, or SSH may become unreachable.')"
+    confirm "$(t '确认修改 SSH 端口？' 'Change SSH port?')" || return
+
+    backup="${config}.bak.$(date +%Y%m%d%H%M%S)"
+    cp "$config" "$backup" || {
+        print_red "$(t '备份 SSH 配置失败。' 'Failed to back up SSH config.')"
+        pause
+        return
+    }
+
+    if grep -Eq '^[[:space:]]*#?[[:space:]]*Port[[:space:]]+' "$config"; then
+        sed -i "0,/^[[:space:]]*#\?[[:space:]]*Port[[:space:]]\+/{s/^[[:space:]]*#\?[[:space:]]*Port[[:space:]]\+.*/Port $new_port/}" "$config"
+    else
+        printf "\nPort %s\n" "$new_port" >> "$config"
+    fi
+
+    if command -v sshd >/dev/null 2>&1 && ! sshd -t; then
+        cp "$backup" "$config"
+        print_red "$(t 'SSH 配置检查失败，已恢复备份：' 'SSH config test failed, backup was restored:') $backup"
+        pause
+        return
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null; then
+            restart_ok=1
+        fi
+    else
+        if service sshd restart 2>/dev/null || service ssh restart 2>/dev/null; then
+            restart_ok=1
+        fi
+    fi
+
+    if [ "$restart_ok" -eq 1 ]; then
+        print_green "$(t 'SSH 端口已修改并已重启服务。配置备份：' 'SSH port was changed and the service was restarted. Config backup:') $backup"
+    else
+        print_yellow "$(t 'SSH 配置已修改，但服务重启失败，请手动重启 ssh/sshd。配置备份：' 'SSH config was changed, but service restart failed. Restart ssh/sshd manually. Config backup:') $backup"
+    fi
+    print_yellow "$(t '请使用新端口重新连接并确认可用后，再关闭当前 SSH 会话。' 'Reconnect with the new port and verify it works before closing this SSH session.')"
+    pause
+}
+
 switch_language() {
     clear
     print_cyan "Language / 语言"
@@ -115,7 +193,8 @@ show_menu() {
     printf "%s: %s\n\n" "$(t '当前语言' 'Current language')" "$LANGUAGE"
     printf "1. %s\n" "$(t '执行 BBR 加速' 'Run BBR acceleration')"
     printf "2. %s\n" "$(t '换源' 'Change mirror')"
-    printf "3. %s\n" "$(t '中英文切换' 'Switch Chinese/English')"
+    printf "3. %s\n" "$(t '修改 SSH 端口' 'Change SSH port')"
+    printf "4. %s\n" "$(t '中英文切换' 'Switch Chinese/English')"
     printf "0. %s\n" "$(t '退出' 'Exit')"
     printf "\n%s" "$(t '请输入选项' 'Enter option'): "
 }
@@ -127,7 +206,8 @@ main() {
         case "$choice" in
             1) run_bbr_acceleration_script ;;
             2) run_change_mirror_script ;;
-            3) switch_language ;;
+            3) change_ssh_port ;;
+            4) switch_language ;;
             0) exit 0 ;;
             *) print_red "$(t '无效选择' 'Invalid choice')"; pause ;;
         esac
