@@ -76,10 +76,96 @@ run_remote_script() {
 }
 
 run_bbr_acceleration_script() {
-    run_remote_script \
-        "$(t 'BBR 加速脚本' 'BBR Acceleration Script')" \
-        "https://scripts.zeroteam.top/NATPlugin/tcp_zhcn.sh" \
-        "https://scripts.zeroteam.top/NATPlugin/tcp.sh"
+    clear
+    local config="/etc/sysctl.d/bbr.conf"
+    local backup
+    local current_qdisc
+    local current_congestion
+    local available_congestion
+
+    print_cyan "$(t '启用 BBR 加速' 'Enable BBR Acceleration')"
+
+    if [ "$EUID" -ne 0 ]; then
+        print_red "$(t '请使用 root 权限运行此功能。' 'Please run this feature as root.')"
+        pause
+        return
+    fi
+
+    if ! command -v sysctl >/dev/null 2>&1; then
+        print_red "$(t '当前系统缺少 sysctl，无法配置 BBR。' 'sysctl is unavailable, cannot configure BBR.')"
+        pause
+        return
+    fi
+
+    current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
+    current_congestion="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+    available_congestion="$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || true)"
+
+    printf "%s: %s\n" "$(t '当前队列算法' 'Current queue discipline')" "${current_qdisc:-unknown}"
+    printf "%s: %s\n" "$(t '当前拥塞控制' 'Current congestion control')" "${current_congestion:-unknown}"
+    printf "%s: %s\n" "$(t '可用拥塞控制' 'Available congestion controls')" "${available_congestion:-unknown}"
+
+    if ! printf '%s\n' "$available_congestion" | grep -qw bbr; then
+        if command -v modprobe >/dev/null 2>&1; then
+            modprobe tcp_bbr 2>/dev/null || true
+            available_congestion="$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || true)"
+        fi
+
+        if ! printf '%s\n' "$available_congestion" | grep -qw bbr; then
+            print_red "$(t '当前内核未提供 BBR，可能需要升级内核或启用 tcp_bbr 模块。' 'The current kernel does not provide BBR. Upgrade the kernel or enable the tcp_bbr module.')"
+            pause
+            return
+        fi
+    fi
+
+    print_yellow "$(t '将写入最小化 BBR 配置到 /etc/sysctl.d/bbr.conf：net.core.default_qdisc=fq，net.ipv4.tcp_congestion_control=bbr。' 'The minimal BBR config will be written to /etc/sysctl.d/bbr.conf: net.core.default_qdisc=fq, net.ipv4.tcp_congestion_control=bbr.')"
+    confirm "$(t '确认继续？' 'Continue?')" || return
+
+    if [ -f "$config" ]; then
+        backup="${config}.bak.$(date +%Y%m%d%H%M%S)"
+        cp "$config" "$backup" || {
+            print_red "$(t '备份 BBR 配置失败。' 'Failed to back up BBR config.')"
+            pause
+            return
+        }
+        printf "%s: %s\n" "$(t '已备份原配置' 'Backed up existing config')" "$backup"
+    fi
+
+    if ! mkdir -p "$(dirname "$config")"; then
+        print_red "$(t '创建 sysctl 配置目录失败。' 'Failed to create sysctl config directory.')"
+        pause
+        return
+    fi
+
+    if ! cat >"$config" <<EOF
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+    then
+        print_red "$(t '写入 BBR 配置失败。' 'Failed to write BBR config.')"
+        pause
+        return
+    fi
+
+    if ! sysctl -p "$config" >/dev/null; then
+        print_red "$(t '应用 BBR 配置失败，请检查系统是否支持相关参数。' 'Failed to apply BBR config. Check whether the system supports these parameters.')"
+        pause
+        return
+    fi
+
+    current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
+    current_congestion="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+
+    printf "%s: %s\n" "$(t '当前队列算法' 'Current queue discipline')" "${current_qdisc:-unknown}"
+    printf "%s: %s\n" "$(t '当前拥塞控制' 'Current congestion control')" "${current_congestion:-unknown}"
+
+    if [ "$current_qdisc" = "fq" ] && [ "$current_congestion" = "bbr" ]; then
+        print_green "$(t 'BBR 已启用并写入持久配置：' 'BBR is enabled and persisted at:') $config"
+    else
+        print_yellow "$(t '配置已写入，但当前状态未完全匹配，可能需要重启或检查内核支持。' 'Config was written, but current state does not fully match. A reboot or kernel check may be required.')"
+    fi
+
+    pause
 }
 
 run_change_mirror_script() {
@@ -191,7 +277,7 @@ show_menu() {
     print_blue "  Linux Toolbox"
     print_blue "========================================"
     printf "%s: %s\n\n" "$(t '当前语言' 'Current language')" "$LANGUAGE"
-    printf "1. %s\n" "$(t '执行 BBR 加速' 'Run BBR acceleration')"
+    printf "1. %s\n" "$(t '启用 BBR 加速' 'Enable BBR acceleration')"
     printf "2. %s\n" "$(t '换源' 'Change mirror')"
     printf "3. %s\n" "$(t '修改 SSH 端口' 'Change SSH port')"
     printf "4. %s\n" "$(t '中英文切换' 'Switch Chinese/English')"
