@@ -78,7 +78,6 @@ run_remote_script() {
 run_bbr_acceleration_script() {
     clear
     local config="/etc/sysctl.d/bbr.conf"
-    local backup
     local current_qdisc
     local current_congestion
     local available_congestion
@@ -120,16 +119,6 @@ run_bbr_acceleration_script() {
 
     print_yellow "$(t '将写入最小化 BBR 配置到 /etc/sysctl.d/bbr.conf：net.core.default_qdisc=fq，net.ipv4.tcp_congestion_control=bbr。' 'The minimal BBR config will be written to /etc/sysctl.d/bbr.conf: net.core.default_qdisc=fq, net.ipv4.tcp_congestion_control=bbr.')"
     confirm "$(t '确认继续？' 'Continue?')" || return
-
-    if [ -f "$config" ]; then
-        backup="${config}.bak.$(date +%Y%m%d%H%M%S)"
-        cp "$config" "$backup" || {
-            print_red "$(t '备份 BBR 配置失败。' 'Failed to back up BBR config.')"
-            pause
-            return
-        }
-        printf "%s: %s\n" "$(t '已备份原配置' 'Backed up existing config')" "$backup"
-    fi
 
     if ! mkdir -p "$(dirname "$config")"; then
         print_red "$(t '创建 sysctl 配置目录失败。' 'Failed to create sysctl config directory.')"
