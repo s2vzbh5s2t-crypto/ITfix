@@ -164,6 +164,20 @@ run_change_mirror_script() {
         "https://linuxmirrors.cn/main.sh"
 }
 
+run_heki_backend_install_script() {
+    clear
+    print_cyan "$(t '安装 heki 后端' 'Install heki backend')"
+
+    if ! command -v curl >/dev/null 2>&1; then
+        print_red "$(t '当前系统缺少 curl，无法运行 heki 安装脚本。' 'curl is unavailable, cannot run the heki install script.')"
+        pause
+        return
+    fi
+
+    bash <(curl -Ls https://raw.githubusercontent.com/hekicore/heki/master/install.sh)
+    pause
+}
+
 change_ssh_port() {
     clear
     local config="/etc/ssh/sshd_config"
@@ -269,7 +283,8 @@ show_menu() {
     printf "1. %s\n" "$(t '启用 BBR 加速' 'Enable BBR acceleration')"
     printf "2. %s\n" "$(t '换源' 'Change mirror')"
     printf "3. %s\n" "$(t '修改 SSH 端口' 'Change SSH port')"
-    printf "4. %s\n" "$(t '中英文切换' 'Switch Chinese/English')"
+    printf "4. %s\n" "$(t '安装 heki 后端' 'Install heki backend')"
+    printf "5. %s\n" "$(t '中英文切换' 'Switch Chinese/English')"
     printf "0. %s\n" "$(t '退出' 'Exit')"
     printf "\n%s" "$(t '请输入选项' 'Enter option'): "
 }
@@ -282,7 +297,8 @@ main() {
             1) run_bbr_acceleration_script ;;
             2) run_change_mirror_script ;;
             3) change_ssh_port ;;
-            4) switch_language ;;
+            4) run_heki_backend_install_script ;;
+            5) switch_language ;;
             0) exit 0 ;;
             *) print_red "$(t '无效选择' 'Invalid choice')"; pause ;;
         esac
