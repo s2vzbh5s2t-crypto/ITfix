@@ -256,6 +256,63 @@ change_ssh_port() {
     pause
 }
 
+run_install_htop() {
+    clear
+    print_cyan "$(t '安装 htop' 'Install htop')"
+
+    if [ "$EUID" -ne 0 ]; then
+        print_red "$(t '请使用 root 权限运行此功能。' 'Please run this feature as root.')"
+        pause
+        return
+    fi
+
+    if command -v htop >/dev/null 2>&1; then
+        print_green "$(t 'htop 已安装。' 'htop is already installed.')"
+        htop --version
+        pause
+        return
+    fi
+
+    local pm=""
+    if command -v apt-get >/dev/null 2>&1; then
+        pm="apt"
+    elif command -v dnf >/dev/null 2>&1; then
+        pm="dnf"
+    elif command -v yum >/dev/null 2>&1; then
+        pm="yum"
+    elif command -v pacman >/dev/null 2>&1; then
+        pm="pacman"
+    elif command -v zypper >/dev/null 2>&1; then
+        pm="zypper"
+    fi
+
+    if [ -z "$pm" ]; then
+        print_red "$(t '未检测到受支持的包管理器（apt/dnf/yum/pacman/zypper）。' 'No supported package manager found (apt/dnf/yum/pacman/zypper).')"
+        pause
+        return
+    fi
+
+    print_yellow "$(t '将使用' 'Will use') $pm $(t '安装 htop...' 'to install htop...')"
+    confirm "$(t '确认继续？' 'Continue?')" || return
+
+    case "$pm" in
+        apt)    apt-get update -qq && apt-get install -y -qq htop ;;
+        dnf)    dnf install -y -q htop ;;
+        yum)    yum install -y -q htop ;;
+        pacman) pacman -Sy --noconfirm --needed htop ;;
+        zypper) zypper --non-interactive install htop ;;
+    esac
+
+    if command -v htop >/dev/null 2>&1; then
+        print_green "$(t 'htop 安装成功。' 'htop installed successfully.')"
+        htop --version
+    else
+        print_red "$(t 'htop 安装失败，请手动检查。' 'htop installation failed. Please check manually.')"
+    fi
+
+    pause
+}
+
 switch_language() {
     clear
     print_cyan "Language / 语言"
@@ -284,7 +341,8 @@ show_menu() {
     printf "2. %s\n" "$(t '换源' 'Change mirror')"
     printf "3. %s\n" "$(t '修改 SSH 端口' 'Change SSH port')"
     printf "4. %s\n" "$(t '安装 heki 后端' 'Install heki backend')"
-    printf "5. %s\n" "$(t '中英文切换' 'Switch Chinese/English')"
+    printf "5. %s\n" "$(t '安装 htop' 'Install htop')"
+    printf "6. %s\n" "$(t '中英文切换' 'Switch Chinese/English')"
     printf "0. %s\n" "$(t '退出' 'Exit')"
     printf "\n%s" "$(t '请输入选项' 'Enter option'): "
 }
@@ -298,7 +356,8 @@ main() {
             2) run_change_mirror_script ;;
             3) change_ssh_port ;;
             4) run_heki_backend_install_script ;;
-            5) switch_language ;;
+            5) run_install_htop ;;
+            6) switch_language ;;
             0) exit 0 ;;
             *) print_red "$(t '无效选择' 'Invalid choice')"; pause ;;
         esac
