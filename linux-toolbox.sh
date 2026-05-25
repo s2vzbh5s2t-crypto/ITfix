@@ -313,6 +313,23 @@ run_install_htop() {
     pause
 }
 
+run_warp_go_script() {
+    clear
+    print_cyan "$(t '安装 warp-go' 'Install warp-go')"
+
+    if ! command -v wget >/dev/null 2>&1; then
+        print_red "$(t '当前系统缺少 wget，无法运行 warp-go 脚本。' 'wget is unavailable, cannot run the warp-go script.')"
+        pause
+        return
+    fi
+
+    print_yellow "$(t '远程脚本可能会修改系统网络配置，请确认来源可信后继续。' 'The remote script may change system network settings. Continue only if you trust the source.')"
+    confirm "$(t '确认继续？' 'Continue?')" || return
+
+    wget -N https://gitlab.com/fscarmen/warp/-/raw/main/warp-go.sh && bash warp-go.sh
+    pause
+}
+
 switch_language() {
     clear
     print_cyan "Language / 语言"
@@ -342,7 +359,8 @@ show_menu() {
     printf "3. %s\n" "$(t '修改 SSH 端口' 'Change SSH port')"
     printf "4. %s\n" "$(t '安装 heki 后端' 'Install heki backend')"
     printf "5. %s\n" "$(t '安装 htop' 'Install htop')"
-    printf "6. %s\n" "$(t '中英文切换' 'Switch Chinese/English')"
+    printf "6. %s\n" "$(t '安装 warp-go' 'Install warp-go')"
+    printf "7. %s\n" "$(t '中英文切换' 'Switch Chinese/English')"
     printf "0. %s\n" "$(t '退出' 'Exit')"
     printf "\n%s" "$(t '请输入选项' 'Enter option'): "
 }
@@ -357,7 +375,8 @@ main() {
             3) change_ssh_port ;;
             4) run_heki_backend_install_script ;;
             5) run_install_htop ;;
-            6) switch_language ;;
+            6) run_warp_go_script ;;
+            7) switch_language ;;
             0) exit 0 ;;
             *) print_red "$(t '无效选择' 'Invalid choice')"; pause ;;
         esac
