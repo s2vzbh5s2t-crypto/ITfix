@@ -64,12 +64,34 @@ run_remote_script() {
     print_yellow "$(t '远程脚本可能会修改系统网络配置，请确认来源可信后继续。' 'The remote script may change system network settings. Continue only if you trust the source.')"
     confirm "$(t '确认继续？' 'Continue?')" || return
 
+    local tmp_script=""
     if command -v curl >/dev/null 2>&1; then
-        bash <(curl -sSL "$script_url")
+        tmp_script="$(mktemp)" || { print_red "$(t '创建临时文件失败。' 'Failed to create a temp file.')"; pause; return; }
+        if ! curl -fsSL "$script_url" -o "$tmp_script"; then
+            print_red "$(t '远程脚本下载失败：' 'Failed to download the remote script:') $script_url"
+            rm -f "$tmp_script"
+            pause
+            return
+        fi
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO- "$script_url" | bash
+        tmp_script="$(mktemp)" || { print_red "$(t '创建临时文件失败。' 'Failed to create a temp file.')"; pause; return; }
+        if ! wget -qO "$tmp_script" "$script_url"; then
+            print_red "$(t '远程脚本下载失败：' 'Failed to download the remote script:') $script_url"
+            rm -f "$tmp_script"
+            pause
+            return
+        fi
     else
         print_red "$(t '当前系统缺少 curl/wget，无法下载远程脚本。' 'curl/wget is unavailable, cannot download the remote script.')"
+        pause
+        return
+    fi
+
+    bash "$tmp_script"
+    local rc=$?
+    rm -f "$tmp_script"
+    if [ "$rc" -ne 0 ]; then
+        print_red "$(t '远程脚本执行失败，请检查上方输出。' 'The remote script failed. Check the output above.')"
     fi
 
     pause
@@ -81,6 +103,8 @@ run_bbr_acceleration_script() {
     local current_qdisc
     local current_congestion
     local available_congestion
+    local allowed_congestion
+    local use_fq=1
 
     print_cyan "$(t '启用 BBR 加速' 'Enable BBR Acceleration')"
 
@@ -99,10 +123,18 @@ run_bbr_acceleration_script() {
     current_qdisc="$(sysctl -n net.core.default_qdisc 2>/dev/null || true)"
     current_congestion="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
     available_congestion="$(sysctl -n net.ipv4.tcp_available_congestion_control 2>/dev/null || true)"
+    allowed_congestion="$(sysctl -n net.ipv4.tcp_allowed_congestion_control 2>/dev/null || true)"
 
     printf "%s: %s\n" "$(t '当前队列算法' 'Current queue discipline')" "${current_qdisc:-unknown}"
     printf "%s: %s\n" "$(t '当前拥塞控制' 'Current congestion control')" "${current_congestion:-unknown}"
     printf "%s: %s\n" "$(t '可用拥塞控制' 'Available congestion controls')" "${available_congestion:-unknown}"
+    printf "%s: %s\n" "$(t '允许拥塞控制' 'Allowed congestion controls')" "${allowed_congestion:-unknown}"
+
+    if [ -n "$current_congestion" ] && ! sysctl -w net.ipv4.tcp_congestion_control="$current_congestion" >/dev/null 2>&1; then
+        print_red "$(t '当前环境无法修改网络相关 sysctl 参数（常见于 OpenVZ/LXC 或容器环境），无法启用 BBR。' 'This environment cannot modify network sysctl settings (common in OpenVZ/LXC or container environments). BBR cannot be enabled.')"
+        pause
+        return
+    fi
 
     if ! printf '%s\n' "$available_congestion" | grep -qw bbr; then
         if command -v modprobe >/dev/null 2>&1; then
@@ -117,7 +149,27 @@ run_bbr_acceleration_script() {
         fi
     fi
 
-    print_yellow "$(t '将写入最小化 BBR 配置到 /etc/sysctl.d/bbr.conf：net.core.default_qdisc=fq，net.ipv4.tcp_congestion_control=bbr。' 'The minimal BBR config will be written to /etc/sysctl.d/bbr.conf: net.core.default_qdisc=fq, net.ipv4.tcp_congestion_control=bbr.')"
+    if [ "$current_qdisc" != "fq" ]; then
+        if [ ! -d /sys/module/sch_fq ]; then
+            command -v modprobe >/dev/null 2>&1 && modprobe sch_fq 2>/dev/null || true
+        fi
+
+        if [ ! -d /sys/module/sch_fq ]; then
+            print_yellow "$(t '当前内核缺少 fq 队列算法（可能需要加载 sch_fq 模块或升级内核）。' 'The current kernel lacks the fq qdisc (load the sch_fq module or upgrade the kernel).')"
+            if confirm "$(t '是否仅启用 BBR，跳过 fq 队列设置？' 'Enable BBR only and skip the fq qdisc setting?')"; then
+                use_fq=0
+            else
+                pause
+                return
+            fi
+        fi
+    fi
+
+    if [ "$use_fq" -eq 1 ]; then
+        print_yellow "$(t '将写入配置到 /etc/sysctl.d/bbr.conf：net.core.default_qdisc=fq，net.ipv4.tcp_congestion_control=bbr。' 'Will write to /etc/sysctl.d/bbr.conf: net.core.default_qdisc=fq, net.ipv4.tcp_congestion_control=bbr.')"
+    else
+        print_yellow "$(t '将写入配置到 /etc/sysctl.d/bbr.conf：net.ipv4.tcp_congestion_control=bbr（跳过 fq 队列设置）。' 'Will write to /etc/sysctl.d/bbr.conf: net.ipv4.tcp_congestion_control=bbr (skipping the fq qdisc setting).')"
+    fi
     confirm "$(t '确认继续？' 'Continue?')" || return
 
     if ! mkdir -p "$(dirname "$config")"; then
@@ -126,17 +178,21 @@ run_bbr_acceleration_script() {
         return
     fi
 
-    if ! cat >"$config" <<EOF
-net.core.default_qdisc = fq
-net.ipv4.tcp_congestion_control = bbr
-EOF
-    then
+    if ! {
+        if [ -n "$allowed_congestion" ] && ! printf '%s\n' "$allowed_congestion" | grep -qw bbr; then
+            printf 'net.ipv4.tcp_allowed_congestion_control = %s bbr\n' "$allowed_congestion"
+        fi
+        if [ "$use_fq" -eq 1 ]; then
+            printf 'net.core.default_qdisc = fq\n'
+        fi
+        printf 'net.ipv4.tcp_congestion_control = bbr\n'
+    } >"$config"; then
         print_red "$(t '写入 BBR 配置失败。' 'Failed to write BBR config.')"
         pause
         return
     fi
 
-    if ! sysctl -p "$config" >/dev/null; then
+    if ! sysctl -p "$config"; then
         print_red "$(t '应用 BBR 配置失败，请检查系统是否支持相关参数。' 'Failed to apply BBR config. Check whether the system supports these parameters.')"
         pause
         return
@@ -148,7 +204,7 @@ EOF
     printf "%s: %s\n" "$(t '当前队列算法' 'Current queue discipline')" "${current_qdisc:-unknown}"
     printf "%s: %s\n" "$(t '当前拥塞控制' 'Current congestion control')" "${current_congestion:-unknown}"
 
-    if [ "$current_qdisc" = "fq" ] && [ "$current_congestion" = "bbr" ]; then
+    if [ "$current_congestion" = "bbr" ] && { [ "$use_fq" -eq 0 ] || [ "$current_qdisc" = "fq" ]; }; then
         print_green "$(t 'BBR 已启用并写入持久配置：' 'BBR is enabled and persisted at:') $config"
     else
         print_yellow "$(t '配置已写入，但当前状态未完全匹配，可能需要重启或检查内核支持。' 'Config was written, but current state does not fully match. A reboot or kernel check may be required.')"
@@ -166,7 +222,11 @@ run_change_mirror_script() {
 
 run_heki_backend_install_script() {
     clear
-    print_cyan "$(t '安装 heki 后端' 'Install heki backend')"
+    if [ "$EUID" -ne 0 ]; then
+        print_red "$(t '请使用 root 权限运行此功能。' 'Please run this feature as root.')"
+        pause
+        return
+    fi
 
     if ! command -v curl >/dev/null 2>&1; then
         print_red "$(t '当前系统缺少 curl，无法运行 heki 安装脚本。' 'curl is unavailable, cannot run the heki install script.')"
@@ -174,8 +234,10 @@ run_heki_backend_install_script() {
         return
     fi
 
-    bash <(curl -Ls https://raw.githubusercontent.com/hekicore/heki/master/install.sh)
-    pause
+    run_remote_script \
+        "$(t '安装 heki 后端' 'Install heki backend')" \
+        "https://raw.githubusercontent.com/hekicore/heki/master/install.sh" \
+        "https://raw.githubusercontent.com/hekicore/heki/master/install.sh"
 }
 
 change_ssh_port() {
@@ -187,6 +249,12 @@ change_ssh_port() {
     local restart_ok=0
 
     print_cyan "$(t '修改 SSH 端口' 'Change SSH Port')"
+
+    if [ "$EUID" -ne 0 ]; then
+        print_red "$(t '请使用 root 权限运行此功能。' 'Please run this feature as root.')"
+        pause
+        return
+    fi
 
     if [ ! -f "$config" ]; then
         print_red "$(t '未找到 SSH 配置文件：' 'SSH config file was not found:') $config"
@@ -214,6 +282,20 @@ change_ssh_port() {
         return
     fi
 
+    if [ "$new_port" != "$current_port" ]; then
+        if command -v ss >/dev/null 2>&1; then
+            if ss -tln 2>/dev/null | awk '{print $4}' | grep -E ":$new_port\$" >/dev/null 2>&1; then
+                print_yellow "$(t '注意：该端口已被其他服务占用。' 'Warning: this port is already in use by another service.')"
+                confirm "$(t '仍然继续？' 'Continue anyway?')" || { pause; return; }
+            fi
+        elif command -v netstat >/dev/null 2>&1; then
+            if netstat -tln 2>/dev/null | awk '{print $4}' | grep -E ":$new_port\$" >/dev/null 2>&1; then
+                print_yellow "$(t '注意：该端口已被其他服务占用。' 'Warning: this port is already in use by another service.')"
+                confirm "$(t '仍然继续？' 'Continue anyway?')" || { pause; return; }
+            fi
+        fi
+    fi
+
     print_yellow "$(t '请确认防火墙和安全组已放行新端口，否则可能无法重新连接 SSH。' 'Make sure the firewall and security group allow the new port, or SSH may become unreachable.')"
     confirm "$(t '确认修改 SSH 端口？' 'Change SSH port?')" || return
 
@@ -224,11 +306,8 @@ change_ssh_port() {
         return
     }
 
-    if grep -Eq '^[[:space:]]*#?[[:space:]]*Port[[:space:]]+' "$config"; then
-        sed -i "0,/^[[:space:]]*#\?[[:space:]]*Port[[:space:]]\+/{s/^[[:space:]]*#\?[[:space:]]*Port[[:space:]]\+.*/Port $new_port/}" "$config"
-    else
-        printf "\nPort %s\n" "$new_port" >> "$config"
-    fi
+    sed -i -E '/^[[:space:]]*#?[[:space:]]*Port[[:space:]]+/d' "$config"
+    printf "\nPort %s\n" "$new_port" >> "$config"
 
     if command -v sshd >/dev/null 2>&1 && ! sshd -t; then
         cp "$backup" "$config"
@@ -296,7 +375,14 @@ run_install_htop() {
     confirm "$(t '确认继续？' 'Continue?')" || return
 
     case "$pm" in
-        apt)    apt-get update -qq && apt-get install -y -qq htop ;;
+        apt)
+            if ! apt-get update -qq; then
+                print_red "$(t '软件源更新失败，无法安装 htop。' 'Failed to update package lists, cannot install htop.')"
+                pause
+                return
+            fi
+            apt-get install -y -qq htop
+            ;;
         dnf)    dnf install -y -q htop ;;
         yum)    yum install -y -q htop ;;
         pacman) pacman -Sy --noconfirm --needed htop ;;
@@ -315,6 +401,8 @@ run_install_htop() {
 
 run_warp_go_script() {
     clear
+    local tmp_dir
+    local url="https://gitlab.com/fscarmen/warp/-/raw/main/warp-go.sh"
     print_cyan "$(t '安装 warp-go' 'Install warp-go')"
 
     if ! command -v wget >/dev/null 2>&1; then
@@ -326,7 +414,20 @@ run_warp_go_script() {
     print_yellow "$(t '远程脚本可能会修改系统网络配置，请确认来源可信后继续。' 'The remote script may change system network settings. Continue only if you trust the source.')"
     confirm "$(t '确认继续？' 'Continue?')" || return
 
-    wget -N https://gitlab.com/fscarmen/warp/-/raw/main/warp-go.sh && bash warp-go.sh
+    tmp_dir="$(mktemp -d)" || { print_red "$(t '创建临时目录失败。' 'Failed to create a temp directory.')"; pause; return; }
+    if ! wget -qN "$url" -P "$tmp_dir"; then
+        print_red "$(t 'warp-go 脚本下载失败。' 'Failed to download the warp-go script.')"
+        rm -rf "$tmp_dir"
+        pause
+        return
+    fi
+
+    bash "$tmp_dir/warp-go.sh"
+    local rc=$?
+    rm -rf "$tmp_dir"
+    if [ "$rc" -ne 0 ]; then
+        print_red "$(t '远程脚本执行失败，请检查上方输出。' 'The remote script failed. Check the output above.')"
+    fi
     pause
 }
 
