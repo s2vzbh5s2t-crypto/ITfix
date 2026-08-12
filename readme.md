@@ -4,7 +4,7 @@
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)](https://www.kernel.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Linux 服务器交互式运维工具箱，默认中文界面，支持一键切换英文（`LANGUAGE=en` 可默认英文）。
+Linux 服务器交互式运维工具箱，中文界面。
 
 ## 功能特性
 
@@ -14,7 +14,6 @@ Linux 服务器交互式运维工具箱，默认中文界面，支持一键切�
 - **安装 heki 后端** — 执行 heki 官方安装脚本
 - **安装 htop** — 自动识别 apt/dnf/yum/pacman/zypper 包管理器
 - **安装 warp-go** — 临时目录下载并校验后执行
-- **中英文切换** — 运行时切换，或通过环境变量 `LANGUAGE=en` 默认英文
 
 所有远程操作均有来源提示与二次确认，关键操作带颜色反馈。
 
@@ -47,19 +46,12 @@ chmod +x linux-toolbox.sh
 sudo bash linux-toolbox.sh
 ```
 
-默认英文界面：
-
-```bash
-LANGUAGE=en bash <(curl -sSL "https://raw.githubusercontent.com/s2vzbh5s2t-crypto/ITfix/main/linux-toolbox.sh")
-```
-
 ## 菜单
 
 ```text
 ========================================
   Linux Toolbox
 ========================================
-当前语言: zh
 
 1. 启用 BBR 加速
 2. 换源
@@ -67,7 +59,6 @@ LANGUAGE=en bash <(curl -sSL "https://raw.githubusercontent.com/s2vzbh5s2t-crypt
 4. 安装 heki 后端
 5. 安装 htop
 6. 安装 warp-go
-7. 中英文切换
 0. 退出
 
 请输入选项: _
@@ -109,10 +100,6 @@ LANGUAGE=en bash <(curl -sSL "https://raw.githubusercontent.com/s2vzbh5s2t-crypt
 ### 6. 安装 warp-go
 
 需要 `wget`。下载 `warp-go.sh` 到临时目录并校验成功后执行，不污染当前目录。
-
-### 7. 中英文切换
-
-运行时在菜单选择语言即时生效；也可以预设环境变量 `LANGUAGE=en` 默认英文。
 
 ## 安全提示
 
