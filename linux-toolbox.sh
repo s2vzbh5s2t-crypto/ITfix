@@ -411,7 +411,6 @@ run_warp_go_script() {
 # 边缘节点。本功能携带 EDNS Client Subnet（+subnet）向权威 DNS 伪造目标地区
 # 来源，获取该地区的边缘 IP 候选，用 ping 测速择优，写入 /etc/hosts 标记块
 # 覆盖系统解析。依赖：dig（apt: dnsutils / yum、dnf: bind-utils）、ping。
-# 逻辑回归测试: bash test-cdn-pin-logic.sh
 
 CDN_PIN_DOMAIN="www.gstatic.com"
 CDN_PIN_ECS_PREFIX="43.129.0.0/24"   # 香港 ECS 前缀（腾讯云 HK 段），可在 bgp.tools 换其它地区段

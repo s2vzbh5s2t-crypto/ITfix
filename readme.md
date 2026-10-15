@@ -115,7 +115,7 @@ VPS 的 IP 归属地（GeoIP）未及时更新时，Google 会把它当作其他
 
 菜单子项：预览 / 应用 / 查看状态 / 回滚。功能全部集成在 `linux-toolbox.sh` 单一脚本内（`cdn_pin_` 前缀函数），仅影响标记块，不碰 hosts 其它内容。
 
-局限：只改变域名解析结果，改变不了 BGP 路由；钉定的 IP 变慢或失效后需重新执行应用。换地区只需改 `linux-toolbox.sh` 中 cdn-pin 配置区的 `CDN_PIN_ECS_PREFIX`（可在 bgp.tools 查询各地区机房段）。逻辑回归测试：`bash test-cdn-pin-logic.sh`。
+局限：只改变域名解析结果，改变不了 BGP 路由；钉定的 IP 变慢或失效后需重新执行应用。换地区只需改 `linux-toolbox.sh` 中 cdn-pin 配置区的 `CDN_PIN_ECS_PREFIX`（可在 bgp.tools 查询各地区机房段）。
 
 ## 安全提示
 
