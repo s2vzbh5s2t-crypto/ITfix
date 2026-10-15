@@ -404,58 +404,271 @@ run_warp_go_script() {
     pause
 }
 
-run_cdn_pin_menu() {
-    local script_dir script choice
+# ==================== CDN 边缘 IP 钉定 ====================
+# 把 CDN_PIN_DOMAIN 钉定到低延迟的 CDN 边缘 IP（默认香港）。
+#
+# 原理：VPS 的 GeoIP 归属地未及时更新时，Google 会按错误的地区给它分配远端
+# 边缘节点。本功能携带 EDNS Client Subnet（+subnet）向权威 DNS 伪造目标地区
+# 来源，获取该地区的边缘 IP 候选，用 ping 测速择优，写入 /etc/hosts 标记块
+# 覆盖系统解析。依赖：dig（apt: dnsutils / yum、dnf: bind-utils）、ping。
+# 逻辑回归测试: bash test-cdn-pin-logic.sh
 
-    print_cyan "CDN 边缘 IP 钉定（www.gstatic.com）"
+CDN_PIN_DOMAIN="www.gstatic.com"
+CDN_PIN_ECS_PREFIX="43.129.0.0/24"   # 香港 ECS 前缀（腾讯云 HK 段），可在 bgp.tools 换其它地区段
+CDN_PIN_MAX_CANDIDATES=8              # 参与测速的候选 IP 上限
+CDN_PIN_PING_COUNT=3                  # 每个候选 ping 次数
+CDN_PIN_PING_WAIT=2                   # 单包超时（秒）
+CDN_PIN_HOSTS="${CDN_PIN_HOSTS:-/etc/hosts}"  # 可用环境变量覆盖（测试用）
+CDN_PIN_MARK_BEGIN="# BEGIN cdn-pin"
+CDN_PIN_MARK_END="# END cdn-pin"
+
+cdn_pin_die() {
+    print_red "$1"
+    exit 1
+}
+
+cdn_pin_require_root() {
+    [ "$EUID" -eq 0 ] || cdn_pin_die "请使用 root 权限运行此功能（需要写入 ${CDN_PIN_HOSTS}）。"
+}
+
+cdn_pin_require_tools() {
+    local t
+    for t in dig ping awk grep; do
+        command -v "$t" >/dev/null 2>&1 || cdn_pin_die "缺少依赖命令：$t（apt: dnsutils / yum: bind-utils）"
+    done
+}
+
+# 发现候选 IP：系统解析 + 权威 NS 携带 ECS 的地区化解析
+cdn_pin_discover_candidates() {
+    local out ns
+    out="$(dig +short +time=3 +tries=1 A "$CDN_PIN_DOMAIN" 2>/dev/null)"
+    for ns in $(dig +short +time=3 +tries=1 NS "${CDN_PIN_DOMAIN#*.}" 2>/dev/null | head -n 2); do
+        out="${out}
+$(dig +short +time=3 +tries=1 A "$CDN_PIN_DOMAIN" "@${ns}" "+subnet=${CDN_PIN_ECS_PREFIX}" 2>/dev/null)"
+    done
+    printf '%s\n' "$out" \
+        | grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' \
+        | awk '!seen[$0]++' \
+        | head -n "$CDN_PIN_MAX_CANDIDATES"
+}
+
+# ping 一个 IP，输出平均延迟(ms)；不通输出空
+cdn_pin_ping_avg() {
+    local ip="$1" out
+    out="$(ping -n -c "$CDN_PIN_PING_COUNT" -W "$CDN_PIN_PING_WAIT" "$ip" 2>/dev/null)"
+    printf '%s\n' "$out" | grep -oE '[0-9.]+/[0-9.]+/[0-9.]+' | head -n 1 | cut -d/ -f2
+}
+
+# 对所有候选测速，输出 "ip avg_ms"（不通为 "ip -"）
+cdn_pin_measure_candidates() {
+    local ip avg
+    for ip in "$@"; do
+        avg="$(cdn_pin_ping_avg "$ip")"
+        printf '%s %s\n' "$ip" "${avg:--}"
+    done
+}
+
+# 从测速结果里选延迟最低的，输出 "ip avg_ms"；全部不通则无输出
+cdn_pin_pick_best() {
+    awk '$2 != "-" { if (min == "" || $2 + 0 < min) { min = $2 + 0; ip = $1; avg = $2 } }
+         END { if (ip != "") print ip, avg }'
+}
+
+# 读取 hosts 中本功能写入的钉定 IP
+cdn_pin_current() {
+    awk -v b="$CDN_PIN_MARK_BEGIN" -v e="$CDN_PIN_MARK_END" -v d="$CDN_PIN_DOMAIN" '
+        $0 == b { skip = 1; next }
+        skip && $0 == e { skip = 0; next }
+        skip && $2 == d { print $1; exit }' "$CDN_PIN_HOSTS" 2>/dev/null
+}
+
+# 删除标记块（保留其它所有内容）
+cdn_pin_strip_block() {
+    awk -v b="$CDN_PIN_MARK_BEGIN" -v e="$CDN_PIN_MARK_END" '
+        $0 == b { skip = 1; next }
+        skip && $0 == e { skip = 0; next }
+        skip { next }
+        { print }' "$1"
+}
+
+cdn_pin_build_block() {
+    printf '%s\n' "$CDN_PIN_MARK_BEGIN"
+    printf '# 由 cdn-pin 生成：%s（ECS %s），请勿手动编辑\n' "$CDN_PIN_DOMAIN" "$CDN_PIN_ECS_PREFIX"
+    printf '%-15s %s\n' "$1" "$CDN_PIN_DOMAIN"
+    printf '%s\n' "$CDN_PIN_MARK_END"
+}
+
+cdn_pin_lock() {
+    command -v flock >/dev/null 2>&1 || return 0
+    exec 9>"${CDN_PIN_HOSTS}.cdn-pin.lock" 2>/dev/null || return 0
+    flock -n 9 || cdn_pin_die "另一个 cdn-pin 实例正在运行。"
+}
+
+# 原子替换：strip 旧标记块（并去掉尾部空行）-> 追加新块 -> 同目录 mv
+cdn_pin_write_block() {
+    local block="$1" tmp owner
+    tmp="$(mktemp "${CDN_PIN_HOSTS}.cdn-pin.XXXXXX")" || cdn_pin_die "创建临时文件失败。"
+    if ! cdn_pin_strip_block "$CDN_PIN_HOSTS" | awk '
+            { lines[NR] = $0 }
+            END {
+                n = NR
+                while (n > 0 && lines[n] ~ /^[[:space:]]*$/) n--
+                for (i = 1; i <= n; i++) print lines[i]
+            }' >"$tmp"; then
+        rm -f "$tmp"
+        cdn_pin_die "读取 ${CDN_PIN_HOSTS} 失败。"
+    fi
+    printf '\n%s\n' "$block" >>"$tmp"
+    owner="$(stat -c '%u:%g' "$CDN_PIN_HOSTS" 2>/dev/null || printf '0:0')"
+    chown "$owner" "$tmp" 2>/dev/null || true
+    chmod 0644 "$tmp"
+    if ! mv -f "$tmp" "$CDN_PIN_HOSTS"; then
+        rm -f "$tmp"
+        cdn_pin_die "写入 ${CDN_PIN_HOSTS} 失败。"
+    fi
+}
+
+cdn_pin_flush_caches() {
+    command -v resolvectl >/dev/null 2>&1 && resolvectl flush-caches >/dev/null 2>&1 && return 0
+    command -v systemd-resolve >/dev/null 2>&1 && systemd-resolve --flush-caches >/dev/null 2>&1 && return 0
+    command -v nscd >/dev/null 2>&1 && nscd -i hosts >/dev/null 2>&1 && return 0
+    return 0
+}
+
+# 发现 + 测速，结果存入全局 CDN_PIN_MEASURED（"ip avg" 行）
+cdn_pin_discover() {
+    local candidates
+    print_cyan "发现候选 IP（权威 NS + ECS ${CDN_PIN_ECS_PREFIX}）..."
+    candidates="$(cdn_pin_discover_candidates)"
+    [ -n "$candidates" ] || return 1
+    # shellcheck disable=SC2086
+    CDN_PIN_MEASURED="$(cdn_pin_measure_candidates $candidates)"
+    [ -n "$CDN_PIN_MEASURED" ] || return 1
+    return 0
+}
+
+cdn_pin_print_measured() {
+    printf "\n%-16s %s\n" "候选 IP" "ping 平均延迟(ms)"
+    printf "%s\n" "------------------------------------------------"
+    printf '%s\n' "$CDN_PIN_MEASURED" | awk '{ printf "%-16s %s\n", $1, ($2 == "-" ? "不通" : $2) }'
     printf "\n"
+}
 
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    script="$script_dir/cdn-pin.sh"
-
-    if [ ! -f "$script" ]; then
-        print_yellow "当前系统缺少 cdn-pin.sh，将从仓库下载运行..."
-        if ! command -v curl >/dev/null 2>&1; then
-            print_red "当前系统缺少 curl，无法下载 cdn-pin.sh。"
-            pause
-            return
+# 输出择优结果（全局 CDN_PIN_BEST）；全不通且 CDN_PIN_FORCE=1 时取第一个，否则中止
+cdn_pin_select_best() {
+    CDN_PIN_BEST="$(printf '%s\n' "$CDN_PIN_MEASURED" | cdn_pin_pick_best)"
+    if [ -z "$CDN_PIN_BEST" ]; then
+        if [ "${CDN_PIN_FORCE:-0}" = "1" ]; then
+            CDN_PIN_BEST="$(printf '%s\n' "$CDN_PIN_MEASURED" | head -n 1)"
+            print_yellow "全部 ping 不通，按 CDN_PIN_FORCE=1 强制采用: $CDN_PIN_BEST"
+        else
+            cdn_pin_die "所有候选都 ping 不通，${CDN_PIN_HOSTS} 未改动。（禁 ICMP 的 VPS 可用 CDN_PIN_FORCE=1）"
         fi
+    fi
+    print_green "择优结果: $CDN_PIN_BEST"
+}
 
-        local tmp_script
-        tmp_script="$(mktemp)" || { print_red "创建临时文件失败。"; pause; return; }
-        local url="https://raw.githubusercontent.com/s2vzbh5s2t-crypto/ITfix/HEAD/cdn-pin.sh"
-        printf "下载地址: %s\n" "$url"
-        if ! curl -fsSL "$url" -o "$tmp_script"; then
-            print_red "cdn-pin.sh 下载失败。"
-            rm -f "$tmp_script"
-            pause
-            return
-        fi
-        script="$tmp_script"
+cdn_pin_preview() {
+    cdn_pin_require_tools
+    print_blue "======== 预览（不写入 ${CDN_PIN_HOSTS}）========"
+    cdn_pin_discover || cdn_pin_die "未发现任何候选 IP。"
+    cdn_pin_print_measured
+    cdn_pin_select_best
+}
+
+cdn_pin_apply() {
+    local new_pin
+    cdn_pin_require_root
+    cdn_pin_require_tools
+    cdn_pin_lock
+    print_blue "======== 应用钉定 ${CDN_PIN_DOMAIN} ========"
+
+    cdn_pin_discover || cdn_pin_die "未发现任何候选 IP，已放弃，${CDN_PIN_HOSTS} 未改动。"
+    cdn_pin_print_measured
+    cdn_pin_select_best
+    new_pin="${CDN_PIN_BEST%% *}"
+
+    if [ "$(cdn_pin_current)" = "$new_pin" ]; then
+        print_green "钉定 IP 无变化（${new_pin}），跳过写入。"
+        cdn_pin_flush_caches
+        return 0
     fi
 
+    cp -a "$CDN_PIN_HOSTS" "$CDN_PIN_HOSTS.cdn-pin.bak" || cdn_pin_die "备份 ${CDN_PIN_HOSTS} 失败。"
+    cdn_pin_write_block "$(cdn_pin_build_block "$new_pin")"
+
+    if [ "$(cdn_pin_current)" = "$new_pin" ]; then
+        cdn_pin_flush_caches
+        print_green "已写入 ${CDN_PIN_HOSTS}：${CDN_PIN_DOMAIN} -> ${new_pin}（备份: ${CDN_PIN_HOSTS}.cdn-pin.bak）"
+        command -v getent >/dev/null 2>&1 \
+            && printf "getent 解析结果: %s\n" "$(getent hosts "$CDN_PIN_DOMAIN" | head -n 1 | awk '{print $1}')"
+    else
+        cp -a "$CDN_PIN_HOSTS.cdn-pin.bak" "$CDN_PIN_HOSTS"
+        cdn_pin_die "回读校验失败，已恢复备份。"
+    fi
+}
+
+cdn_pin_status() {
+    local pinned sys_ip
+    cdn_pin_require_tools
+    print_blue "======== 状态 ========"
+
+    pinned="$(cdn_pin_current)"
+    if [ -n "$pinned" ]; then
+        printf "当前钉定: %-16s ping %s ms\n" "$pinned" "$(cdn_pin_ping_avg "$pinned" | { grep . || printf '不通'; })"
+    else
+        print_yellow "当前未钉定（${CDN_PIN_HOSTS} 中无 cdn-pin 标记块）。"
+    fi
+
+    sys_ip="$(dig +short +time=3 +tries=1 A "$CDN_PIN_DOMAIN" 2>/dev/null | grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' | head -n 1)"
+    if [ -n "$sys_ip" ]; then
+        printf "系统解析: %-16s ping %s ms\n" "$sys_ip" "$(cdn_pin_ping_avg "$sys_ip" | { grep . || printf '不通'; })"
+    else
+        print_yellow "系统解析失败（DNS 查询无结果）。"
+    fi
+
+    command -v getent >/dev/null 2>&1 \
+        && printf "系统生效: %s\n" "$(getent hosts "$CDN_PIN_DOMAIN" | head -n 1 | awk '{print $1}')"
+    printf "ECS 前缀: %s\n" "$CDN_PIN_ECS_PREFIX"
+}
+
+cdn_pin_rollback() {
+    cdn_pin_require_root
+    cdn_pin_lock
+    print_blue "======== 回滚 ========"
+
+    grep -qF "$CDN_PIN_MARK_BEGIN" "$CDN_PIN_HOSTS" 2>/dev/null \
+        || { print_yellow "未找到钉定条目，无需回滚。"; return 0; }
+
+    cp -a "$CDN_PIN_HOSTS" "$CDN_PIN_HOSTS.cdn-pin.bak" || cdn_pin_die "备份 ${CDN_PIN_HOSTS} 失败。"
+    cdn_pin_write_block ""
+    cdn_pin_flush_caches
+    print_green "已移除钉定条目，恢复系统解析。（备份: ${CDN_PIN_HOSTS}.cdn-pin.bak）"
+}
+
+run_cdn_pin_menu() {
+    local choice
     while true; do
         clear
         print_blue "========================================"
-        print_blue "  CDN 边缘 IP 钉定"
+        print_blue "  CDN 边缘 IP 钉定（${CDN_PIN_DOMAIN}）"
         print_blue "========================================"
         printf "\n"
+        printf "当前钉定: %s\n\n" "$(cdn_pin_current 2>/dev/null || true)"
         printf "1. 预览（发现候选 + ping 测速，不写入）\n"
-        printf "2. 应用（写入 /etc/hosts）\n"
+        printf "2. 应用（写入 %s）\n" "$CDN_PIN_HOSTS"
         printf "3. 查看状态\n"
         printf "4. 回滚（移除钉定）\n"
         printf "0. 返回\n"
         printf "\n请输入选项: "
         read -r choice
+        # 在子 shell 中执行，内部 die 的 exit 不会退出整个工具箱
         case "$choice" in
-            1) bash "$script" preview; pause ;;
-            2) bash "$script" apply; pause ;;
-            3) bash "$script" status; pause ;;
-            4) bash "$script" rollback; pause ;;
-            0)
-                [ -f "$tmp_script" ] && rm -f "$tmp_script"
-                return
-                ;;
+            1) printf "\n"; ( cdn_pin_preview ); pause ;;
+            2) printf "\n"; ( cdn_pin_apply ); pause ;;
+            3) printf "\n"; ( cdn_pin_status ); pause ;;
+            4) printf "\n"; ( cdn_pin_rollback ); pause ;;
+            0) return ;;
             *) print_red "无效选择"; pause ;;
         esac
     done

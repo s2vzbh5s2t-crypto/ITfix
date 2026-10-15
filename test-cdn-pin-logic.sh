@@ -9,9 +9,9 @@ trap 'rm -f "$HOSTS_TMP"' EXIT
 
 export CDN_PIN_HOSTS="$HOSTS_TMP"
 
-# 去掉末尾的命令分发后 source，拿到全部函数定义
+# 去掉末尾的 main 调用后 source，拿到全部函数定义
 # shellcheck disable=SC1090
-source <(sed '/^case "${1:-}" in$/,/^esac$/d' "$SCRIPT_DIR/cdn-pin.sh")
+source <(sed '$d' "$SCRIPT_DIR/linux-toolbox.sh")
 
 PASS=0
 FAIL=0
@@ -32,7 +32,7 @@ cat >"$HOSTS_TMP" <<'EOF'
 ::1         localhost
 
 # BEGIN cdn-pin
-# 由 cdn-pin.sh 生成：www.gstatic.com（ECS 43.129.0.0/24），请勿手动编辑
+# 由 cdn-pin 生成：www.gstatic.com（ECS 43.129.0.0/24），请勿手动编辑
 142.250.66.4   www.gstatic.com
 # END cdn-pin
 1.2.3.4    example.com
@@ -40,28 +40,28 @@ EOF
 
 # ---- strip_block：删块保其余 ----
 check "strip_block 删除标记块并保留其他条目" \
-    "$(strip_block "$HOSTS_TMP" | tr '\n' '|')" \
+    "$(cdn_pin_strip_block "$HOSTS_TMP" | tr '\n' '|')" \
     "127.0.0.1   localhost|::1         localhost||1.2.3.4    example.com|"
 
-# ---- current_pin：读旧钉定 ----
-check "current_pin 读取旧钉定 IP" "$(current_pin)" "142.250.66.4"
+# ---- current：读旧钉定 ----
+check "cdn_pin_current 读取旧钉定 IP" "$(cdn_pin_current)" "142.250.66.4"
 
 # ---- build_block + write 回环 ----
-block="$(build_block "142.251.200.1")"
-write_hosts_with_block "$block"
-check "写入后 current_pin 回读正确" "$(current_pin)" "142.251.200.1"
+block="$(cdn_pin_build_block "142.251.200.1")"
+cdn_pin_write_block "$block"
+check "写入后 cdn_pin_current 回读正确" "$(cdn_pin_current)" "142.251.200.1"
 check "普通条目未受影响" "$(grep -c 'example.com' "$HOSTS_TMP")" "1"
 check "旧钉定 IP 已被替换" "$(grep -c '142.250.66.4' "$HOSTS_TMP")" "0"
 
 # ---- 幂等：同一 block 再写一次，内容不变 ----
 before="$(md5sum "$HOSTS_TMP" | cut -d' ' -f1)"
-write_hosts_with_block "$block"
+cdn_pin_write_block "$block"
 after="$(md5sum "$HOSTS_TMP" | cut -d' ' -f1)"
 check "重复写入同一 block 幂等" "$after" "$before"
 
 # ---- 回滚：写空 block 即删除 ----
-write_hosts_with_block ""
-check "回滚后无钉定条目" "$(current_pin)" ""
+cdn_pin_write_block ""
+check "回滚后无钉定条目" "$(cdn_pin_current)" ""
 check "回滚后标记块不存在" "$(grep -c 'cdn-pin' "$HOSTS_TMP")" "0"
 check "回滚后 example.com 仍在" "$(grep -c 'example.com' "$HOSTS_TMP")" "1"
 
@@ -70,9 +70,9 @@ measured="9.9.9.9 50
 142.251.0.1 12.3
 142.251.0.2 -
 142.251.0.3 30"
-check "pick_best 选延迟最低" "$(printf '%s\n' "$measured" | pick_best)" "142.251.0.1 12.3"
+check "pick_best 选延迟最低" "$(printf '%s\n' "$measured" | cdn_pin_pick_best)" "142.251.0.1 12.3"
 check "全部不通时 pick_best 无输出" \
-    "$(printf '1.1.1.1 -\n2.2.2.2 -\n' | pick_best)" ""
+    "$(printf '1.1.1.1 -\n2.2.2.2 -\n' | cdn_pin_pick_best)" ""
 
 # ---- 平均延迟解析（iputils 与 busybox 两种输出格式） ----
 parse_rtt() { printf '%s\n' "$1" | grep -oE '[0-9.]+/[0-9.]+/[0-9.]+' | head -n 1 | cut -d/ -f2; }
