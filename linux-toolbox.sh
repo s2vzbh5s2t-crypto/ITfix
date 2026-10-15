@@ -404,6 +404,63 @@ run_warp_go_script() {
     pause
 }
 
+run_cdn_pin_menu() {
+    local script_dir script choice
+
+    print_cyan "CDN 边缘 IP 钉定（www.gstatic.com）"
+    printf "\n"
+
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    script="$script_dir/cdn-pin.sh"
+
+    if [ ! -f "$script" ]; then
+        print_yellow "当前系统缺少 cdn-pin.sh，将从仓库下载运行..."
+        if ! command -v curl >/dev/null 2>&1; then
+            print_red "当前系统缺少 curl，无法下载 cdn-pin.sh。"
+            pause
+            return
+        fi
+
+        local tmp_script
+        tmp_script="$(mktemp)" || { print_red "创建临时文件失败。"; pause; return; }
+        local url="https://raw.githubusercontent.com/s2vzbh5s2t-crypto/ITfix/HEAD/cdn-pin.sh"
+        printf "下载地址: %s\n" "$url"
+        if ! curl -fsSL "$url" -o "$tmp_script"; then
+            print_red "cdn-pin.sh 下载失败。"
+            rm -f "$tmp_script"
+            pause
+            return
+        fi
+        script="$tmp_script"
+    fi
+
+    while true; do
+        clear
+        print_blue "========================================"
+        print_blue "  CDN 边缘 IP 钉定"
+        print_blue "========================================"
+        printf "\n"
+        printf "1. 预览（发现候选 + ping 测速，不写入）\n"
+        printf "2. 应用（写入 /etc/hosts）\n"
+        printf "3. 查看状态\n"
+        printf "4. 回滚（移除钉定）\n"
+        printf "0. 返回\n"
+        printf "\n请输入选项: "
+        read -r choice
+        case "$choice" in
+            1) bash "$script" preview; pause ;;
+            2) bash "$script" apply; pause ;;
+            3) bash "$script" status; pause ;;
+            4) bash "$script" rollback; pause ;;
+            0)
+                [ -f "$tmp_script" ] && rm -f "$tmp_script"
+                return
+                ;;
+            *) print_red "无效选择"; pause ;;
+        esac
+    done
+}
+
 show_menu() {
     clear
     print_blue "========================================"
@@ -416,6 +473,7 @@ show_menu() {
     printf "4. 安装 heki 后端\n"
     printf "5. 安装 htop\n"
     printf "6. 安装 warp-go\n"
+    printf "7. CDN 边缘 IP 钉定（gstatic）\n"
     printf "0. 退出\n"
     printf "\n请输入选项: "
 }
@@ -431,6 +489,7 @@ main() {
             4) run_heki_backend_install_script ;;
             5) run_install_htop ;;
             6) run_warp_go_script ;;
+            7) run_cdn_pin_menu ;;
             0) exit 0 ;;
             *) print_red "无效选择"; pause ;;
         esac
